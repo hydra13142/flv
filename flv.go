@@ -1,7 +1,7 @@
 package flv
 
 import (
-	"amf"
+	"github.com/hydra13142/amf"
 	"bytes"
 	"fmt"
 	"io"
@@ -128,7 +128,7 @@ func (this *Flv) WriteTo(w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		_, err = w.Write(amf.ToInt32(int32(tag.Size())))
+		_, err = w.Write(amf.ToInt32(int32(tag.Size() + 11)))
 		if err != nil {
 			return err
 		}
