@@ -4,6 +4,7 @@ import (
 	"github.com/hydra13142/amf"
 	"bytes"
 	"fmt"
+	"io/ioutil"
 	"io"
 )
 
@@ -72,7 +73,7 @@ func (this *Flv) ReadTagFrom(r io.Reader) error {
 	return err
 }
 
-func (this *Flv) ReadFrom(r io.Reader) (err error) {
+func (this *Flv) ReadFromFile(r io.Reader) (err error) {
 	err = this.ReadHeadFrom(r)
 	if err != nil {
 		return err
@@ -81,18 +82,11 @@ func (this *Flv) ReadFrom(r io.Reader) (err error) {
 	if err != nil {
 		return err
 	}
-	pr := amf.New()
-	script := this.Tags[0].Data
-	x, script, _ := pr.DecodeAMF0(script)
-	y, script, _ := pr.DecodeAMF0(script)
-	if x.(string) != "onMetaData" {
+	if string(this.Tags[0].Data[3:13]) != "onMetaData" {
 		return fmt.Errorf("without media information")
 	}
-	size := int(y.(amf.ECMA)["filesize"].(float64))
-	rest := size - len(this.Head) - len(this.Tags[0].Data) - 19
-	data := make([]byte, rest)
-	l, err := r.Read(data)
-	if l != rest {
+	data, err := ioutil.ReadAll(r)
+	if err != nil {
 		return err
 	}
 	r = bytes.NewReader(data)
