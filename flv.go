@@ -1,10 +1,8 @@
 package flv
 
 import (
-	"github.com/hydra13142/amf"
-	"bytes"
 	"fmt"
-	"io/ioutil"
+	"github.com/hydra13142/amf"
 	"io"
 )
 
@@ -85,11 +83,6 @@ func (this *Flv) ReadFromFile(r io.Reader) (err error) {
 	if string(this.Tags[0].Data[3:13]) != "onMetaData" {
 		return fmt.Errorf("without media information")
 	}
-	data, err := ioutil.ReadAll(r)
-	if err != nil {
-		return err
-	}
-	r = bytes.NewReader(data)
 	for err != io.EOF {
 		err = this.ReadTagFrom(r)
 		if err != nil && err != io.EOF {
