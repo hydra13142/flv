@@ -2,158 +2,181 @@ package main
 
 import (
 	"bytes"
-	"fmt"
-	amf "github.com/hydra13142/amf/ruled"
+	"github.com/hydra13142/encoding/AMF"
 	"github.com/hydra13142/flv"
+	"log"
 	"os"
 )
 
-func MergeFlv(files []string, file string) {
+func LogError(x ...interface{}) {
+	if x[0] != nil {
+		log.Fatalln(x...)
+	}
+}
 
-	flvs := make([]*flv.Flv, len(files))
+func MergeFLV(list []string, file string) {
+	var (
+		meta  flv.MetaData
+		video []flv.Tag
+		audio []flv.Tag
+	)
+
+	// 读取所有flv文件
+	flvs := make([]*flv.FLV, len(list))
 	for i := 0; i < len(flvs); i++ {
 		flvs[i] = flv.New()
 	}
-
-	for i, name := range files {
+	for i, name := range list {
 		r, err := os.Open(name)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		err = flvs[i].ReadFromFile(r)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
+		LogError(err)
+		err = flvs[i].ReadFrom(r)
+		LogError(err)
 		r.Close()
 	}
 
-	r := amf.NewAMF()
-	script := flvs[0].Tags[0].Data
-	_, script, _ = r.DecodeAMF0(script)
-	info, script, _ := r.DecodeAMF0(script)
-	meta := info.(amf.ECMA)
-	var step int
-	l := len(flvs[0].Tags)
-	if rate, ok := meta.Get("framerate").(float64); ok {
-		step = int(1000 / rate)
-	} else {
-		var a [2]int
-		for i, j := 1, 0; j < 2 && i < l; i++ {
-			if flvs[0].Tags[i].Video() {
-				a[j] = i
-				j++
-			}
-		}
-		step = flvs[0].Tags[a[1]].Time() - flvs[0].Tags[a[0]].Time()
-	}
-	place := []int{}
-	times := []int{}
-	for i := 1; i < len(flvs); i++ {
-		l += len(flvs[i].Tags) - 1
-	}
-	tag := make([]flv.Tag, l)
-	copy(tag, flvs[0].Tags)
-	l = len(flvs[0].Tags)
-	d, v, a, p := 0, 0, 0, 0
-	for i := 1; i < l; i++ {
-		if tag[i].Video() {
-			if flv.Keyframe(tag[i].Data[0]) {
-				place = append(place, p)
-				times = append(times, tag[i].Time())
-			}
-			v += tag[i].Size()
-		} else if tag[i].Audio() {
-			a += tag[i].Size()
-		} else if tag[i].Script() {
-			d += tag[i].Size()
-		}
-		p += tag[i].Size() + 15
-	}
-	for _, one := range flvs[1:] {
-		x, y := l-1, 0
-		for !tag[x].Video() {
-			x--
-		}
-		for !one.Tags[y].Video() {
-			y++
-		}
-		move := tag[x].Time() - one.Tags[y].Time() + step
-		for i := 1; i < len(one.Tags); i, l = i+1, l+1 {
-			tag[l] = one.Tags[i]
-			tag[l].SetTime(tag[l].Time() + move)
-			if tag[l].Video() {
-				if flv.Keyframe(tag[l].Data[0]) {
-					place = append(place, p)
-					times = append(times, tag[l].Time())
-				}
-				v += tag[i].Size()
-			} else if tag[i].Audio() {
-				a += tag[i].Size()
-			} else if tag[i].Script() {
-				d += tag[i].Size()
-			}
-			p += tag[l].Size() + 15
-		}
-	}
-	num := len(times)
-	if tag[l-1].Time()-tag[l-2].Time() > step {
-		lasttime := tag[l-2].Time() + step
-		tag[l-1].SetTime(lasttime)
-		if tag[l-1].Video() {
-			if flv.Keyframe(tag[l-1].Data[0]) {
-				times[num-1] = lasttime
-			}
-		}
-	}
-	r.Reset()
-	meta.Del("keyframes")
-	remain, _ := r.CountAMF0(meta)
-	header := len(flvs[0].Head) + 4
-	offset := 11 + 13 + (remain + 18*num + 47) + 3 + 4
-	positions := make([]interface{}, num)
-	timestamps := make([]interface{}, num)
-	for i := 0; i < num; i++ {
-		positions[i] = float64(place[i] + offset)
-		timestamps[i] = float64(times[i])
-	}
-	duration := float64(tag[l-1].Time()) / 1000
-	meta.Set("duration", duration)
-	meta.Set("lasttimestamp", duration)
-	frame := amf.NewECMA()
-	frame.Set("filepositions", amf.Strict(positions))
-	frame.Set("times", amf.Strict(timestamps))
-	meta.Set("keyframes", amf.Object{"", frame})
-	meta.Set("filesize", float64(p+offset+header))
-	meta.Set("datasize", float64(d))
-	meta.Set("audiosize", float64(a))
-	meta.Set("videosize", float64(v))
-	meta.Set("lastkeyframelocation", positions[num-1])
-	meta.Set("lastkeyframetimestamp", timestamps[num-1])
-	sx, _ := r.EncodeAMF0("onMetaData")
-	sy, _ := r.EncodeAMF0(meta)
-	tag[0].Data = bytes.Join([][]byte{sx, sy, []byte{0, 0, 9}}, nil)
-	tag[0].SetSize(len(tag[0].Data))
-	flvs[0].Tags = tag
+	// 读取第一个文件的元数据
+	d := AMF.NewDecoder(bytes.NewReader(flvs[0].Tags[0].Data))
+	LogError(d.Decode(nil))
+	LogError(d.Decode(&meta))
 
-	w, err := os.Create(file)
-	if err != nil {
-		fmt.Println(err)
-		return
+	// 将所有文件的tag分类并顺序连接
+	step := int(1000 / meta.FrameRate)
+	move := 0
+	for _, one := range flvs {
+		if i := len(video) - 1; i > 0 {
+			for j := 1; j < len(one.Tags); j++ {
+				if one.Tags[j].Video() {
+					move = video[i].Time() + step - one.Tags[j].Time()
+					break
+				}
+			}
+		}
+		for _, tag := range one.Tags[1:] {
+			tag.SetTime(tag.Time() + move)
+			switch {
+			case tag.Video():
+				video = append(video, tag)
+			case tag.Audio():
+				audio = append(audio, tag)
+			}
+		}
 	}
-	flvs[0].WriteTo(w)
+
+	// 对tag进行修复，去掉前黑和后黑
+	var begin, over int
+	if len(video) > 2 {
+		a, b := video[0].Time(), video[1].Time()
+		if b-a > step*3 {
+			video = video[1:]
+			begin = b
+		} else {
+			begin = a
+		}
+	}
+	if i := len(video) - 1; i > 1 {
+		a, b := video[i-1].Time(), video[i].Time()
+		if b-a > step*3 {
+			video = video[:i]
+			over = a
+		} else {
+			over = b
+		}
+	}
+	for {
+		l := len(audio)
+		if l <= 0 || audio[0].Time() >= begin {
+			break
+		}
+		audio = audio[1:]
+	}
+	for {
+		l := len(audio)
+		if l <= 0 || audio[l-1].Time() <= over {
+			break
+		}
+		audio = audio[:l-1]
+	}
+
+	// 将tag按时间顺序集中到一起
+	whole := make([]flv.Tag, len(audio)+len(video)+1)
+	times := []float64{}
+	place := []float64{}
+	A, V, D, F := 0, 0, 0, 0
+	i, j, t := 0, 0, 1
+	for {
+		var a, v int
+		if i >= len(audio) {
+			a = 1 << 30
+		} else {
+			a = audio[i].Time()
+		}
+		if j >= len(video) {
+			v = 1 << 30
+		} else {
+			v = video[j].Time()
+		}
+		if a == v && v == 1<<30 {
+			break
+		}
+		if a <= v {
+			whole[t] = audio[i]
+			A += audio[i].Size()
+			i++
+		} else {
+			if flv.Keyframe(video[j].Data[0]) {
+				times = append(times, float64(video[j].Time())/1000)
+				place = append(place, float64(F))
+			}
+			whole[t] = video[j]
+			V += video[j].Size()
+			j++
+		}
+		whole[t].SetTime(whole[t].Time() - begin)
+		D += whole[t].Size()
+		F += whole[t].Size() + 15
+		t++
+	}
+
+	// 更新元数据
+	meta.Duration = float64(over-begin) / 1000
+	meta.DataSize = float64(D)
+	meta.AudioSize = float64(A)
+	meta.VideoSize = float64(V)
+	meta.HasKeyframes = true
+	meta.Keyframes = flv.Frames{times, place}
+	meta.LastTimeStamp = meta.Duration
+	meta.LastKeyframeTimeStamp = times[len(times)-1]
+	p := bytes.NewBuffer(nil)
+	e := AMF.NewEncoder(p)
+	e.Encode(meta, "AMF0")
+	header := len(flvs[0].Head) + 4
+	offset := 11 + 13 + p.Len() + 3 + 4
+	for i, v := range place {
+		place[i] = v + float64(offset)
+	}
+	meta.FileSize = float64(F + header + offset)
+	meta.LastKeyframeLocation = place[len(place)-1]
+
+	// 创建元数据的标签
+	p.Reset()
+	e.Encode("onMetaData", "AMF0")
+	e.Encode(meta, "AMF0")
+	whole[0].Head = flvs[0].Tags[0].Head
+	whole[0].Data = append(p.Bytes(), 0, 0, 9)
+	whole[0].SetSize(p.Len() + 3)
+
+	// 写入flv文件
+	all := flv.FLV{flvs[0].Head, whole}
+	w, err := os.Create(file)
+	LogError(err)
+	all.WriteTo(w)
 	w.Close()
 }
 
 func main() {
-	if l := len(os.Args); l <= 1 {
-		fmt.Println("usage : executable [src...] dest")
-		return
-	} else if l == 2 {
-		MergeFlv(os.Args[1:], os.Args[1])
-	} else {
-		l--
-		MergeFlv(os.Args[1:l], os.Args[l])
+	l := len(os.Args)
+	if l <= 1 {
+		log.Fatal("usage : executable [src...] dest")
 	}
+	MergeFLV(os.Args[1:], "./merge.flv")
 }

@@ -2,44 +2,43 @@ package flv
 
 import (
 	"fmt"
-	"github.com/hydra13142/amf"
 	"io"
 )
 
-type Flv struct {
+type FLV struct {
 	Head []byte
 	Tags []Tag
 }
 
-func New() *Flv {
-	return &Flv{[]byte{}, []Tag{}}
+func New() *FLV {
+	return &FLV{[]byte{}, []Tag{}}
 }
 
-func (this *Flv) Audio() bool {
+func (this *FLV) Audio() bool {
 	return len(this.Head) >= 9 && this.Head[4]&4 != 0
 }
 
-func (this *Flv) Video() bool {
+func (this *FLV) Video() bool {
 	return len(this.Head) >= 9 && this.Head[4]&1 != 0
 }
 
-func (this *Flv) ReadHeadFrom(r io.Reader) error {
+func (this *FLV) readHead(r io.Reader) error {
 	data := make([]byte, 9)
 	i, err := r.Read(data)
 	if i != 9 || err != nil {
-		return fmt.Errorf("Flv Header uncomplete")
+		return fmt.Errorf("FLV Header uncomplete")
 	}
 	if data[0] != 'F' || data[1] != 'L' || data[2] != 'V' || data[3] != 1 {
-		return fmt.Errorf("Not a Flv Header")
+		return fmt.Errorf("Not a FLV Header")
 	}
-	l := amf.Int32(data[5:]) - 5
+	l := bytes_int32(data[5:]) - 5
 	rest := make([]byte, l)
 	i, err = r.Read(rest)
 	if i != int(l) {
-		return fmt.Errorf("Flv Header uncomplete / without previous tag size #0")
+		return fmt.Errorf("FLV Header uncomplete")
 	}
 	if err != nil {
-		return fmt.Errorf("Without Flv Tags")
+		return fmt.Errorf("Without FLV Tags")
 	}
 	this.Head = make([]byte, 5+l)
 	copy(this.Head, data)
@@ -47,20 +46,20 @@ func (this *Flv) ReadHeadFrom(r io.Reader) error {
 	return nil
 }
 
-func (this *Flv) ReadTagFrom(r io.Reader) error {
+func (this *FLV) readTag(r io.Reader) error {
 	data := make([]byte, 11)
 	i, err := r.Read(data)
-	if i != 11 {
-		if err == io.EOF {
-			return err
-		}
-		return fmt.Errorf("Flv Tag Header uncomplete")
+	if err != nil {
+		return err
 	}
-	l := amf.Int24(data[1:])
+	if i != 11 {
+		return fmt.Errorf("FLV Tag Header uncomplete")
+	}
+	l := bytes_int24(data[1:])
 	body := make([]byte, l+4)
 	i, err = r.Read(body)
 	if i != int(l+4) {
-		return fmt.Errorf("Flv Tag Body uncomplete")
+		return fmt.Errorf("FLV Tag Body uncomplete")
 	}
 	switch data[0] & 31 {
 	case 8, 9, 18:
@@ -71,12 +70,12 @@ func (this *Flv) ReadTagFrom(r io.Reader) error {
 	return err
 }
 
-func (this *Flv) ReadFromFile(r io.Reader) (err error) {
-	err = this.ReadHeadFrom(r)
+func (this *FLV) ReadFrom(r io.Reader) (err error) {
+	err = this.readHead(r)
 	if err != nil {
 		return err
 	}
-	err = this.ReadTagFrom(r)
+	err = this.readTag(r)
 	if err != nil {
 		return err
 	}
@@ -84,7 +83,7 @@ func (this *Flv) ReadFromFile(r io.Reader) (err error) {
 		return fmt.Errorf("without media information")
 	}
 	for err != io.EOF {
-		err = this.ReadTagFrom(r)
+		err = this.readTag(r)
 		if err != nil && err != io.EOF {
 			return err
 		}
@@ -97,8 +96,8 @@ func (this *Flv) ReadFromFile(r io.Reader) (err error) {
 	return nil
 }
 
-func (this *Flv) WriteTo(w io.Writer) error {
-	_, err := w.Write(this.Head)
+func (this *FLV) WriteTo(w io.Writer) (err error) {
+	_, err = w.Write(this.Head)
 	if err != nil {
 		return err
 	}
@@ -115,7 +114,7 @@ func (this *Flv) WriteTo(w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		_, err = w.Write(amf.ToInt32(int32(tag.Size() + 11)))
+		_, err = w.Write(int32_bytes(int(tag.Size() + 11)))
 		if err != nil {
 			return err
 		}
