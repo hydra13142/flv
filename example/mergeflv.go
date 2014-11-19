@@ -2,23 +2,19 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"fmt"
 	"github.com/hydra13142/encoding/AMF"
 	"github.com/hydra13142/flv"
-	"log"
 	"os"
 )
 
-func LogError(x ...interface{}) {
-	if x[0] != nil {
-		log.Fatalln(x...)
-	}
-}
-
-func MergeFLV(list []string, file string) {
+func MergeFLV(list []string, file string) (err error) {
 	var (
-		meta  flv.MetaData
-		video []flv.Tag
-		audio []flv.Tag
+		meta        flv.MetaData
+		video       []flv.Tag
+		audio       []flv.Tag
+		begin, over int
 	)
 
 	// 读取所有flv文件
@@ -28,16 +24,26 @@ func MergeFLV(list []string, file string) {
 	}
 	for i, name := range list {
 		r, err := os.Open(name)
-		LogError(err)
+		if err != nil {
+			return err
+		}
 		err = flvs[i].ReadFrom(r)
-		LogError(err)
+		if err != nil {
+			return err
+		}
 		r.Close()
 	}
 
 	// 读取第一个文件的元数据
 	d := AMF.NewDecoder(bytes.NewReader(flvs[0].Tags[0].Data))
-	LogError(d.Decode(nil))
-	LogError(d.Decode(&meta))
+	err = d.Decode(nil)
+	if err != nil {
+		return err
+	}
+	err = d.Decode(&meta)
+	if err != nil {
+		return err
+	}
 
 	// 将所有文件的tag分类并顺序连接
 	step := int(1000 / meta.FrameRate)
@@ -63,7 +69,6 @@ func MergeFLV(list []string, file string) {
 	}
 
 	// 对tag进行修复，去掉前黑和后黑
-	var begin, over int
 	if len(video) > 2 {
 		a, b := video[0].Time(), video[1].Time()
 		if b-a > step*3 {
@@ -148,7 +153,10 @@ func MergeFLV(list []string, file string) {
 	meta.LastKeyframeTimeStamp = times[len(times)-1]
 	p := bytes.NewBuffer(nil)
 	e := AMF.NewEncoder(p)
-	e.Encode(meta, "AMF0")
+	err = e.Encode(meta, "AMF0")
+	if err != nil {
+		return err
+	}
 	header := len(flvs[0].Head) + 4
 	offset := 11 + 13 + p.Len() + 3 + 4
 	for i, v := range place {
@@ -160,7 +168,10 @@ func MergeFLV(list []string, file string) {
 	// 创建元数据的标签
 	p.Reset()
 	e.Encode("onMetaData", "AMF0")
-	e.Encode(meta, "AMF0")
+	err = e.Encode(meta, "AMF0")
+	if err != nil {
+		return err
+	}
 	whole[0].Head = flvs[0].Tags[0].Head
 	whole[0].Data = append(p.Bytes(), 0, 0, 9)
 	whole[0].SetSize(p.Len() + 3)
@@ -168,15 +179,23 @@ func MergeFLV(list []string, file string) {
 	// 写入flv文件
 	all := flv.FLV{flvs[0].Head, whole}
 	w, err := os.Create(file)
-	LogError(err)
+	if err != nil {
+		return err
+	}
 	all.WriteTo(w)
 	w.Close()
+	return nil
 }
 
 func main() {
-	l := len(os.Args)
-	if l <= 1 {
-		log.Fatal("usage : executable [src...] dest")
+	name := flag.String("o", "./merge.flv", "merged flv name")
+	flag.Parse()
+	if flag.NArg() == 0 {
+		flag.PrintDefaults()
+	} else {
+		err := MergeFLV(flag.Args(), *name)
+		if err != nil {
+			fmt.Println(err)
+		}
 	}
-	MergeFLV(os.Args[1:], "./merge.flv")
 }
