@@ -1,17 +1,28 @@
 package flv
 
 import (
-	"fmt"
+	"bytes"
+	"errors"
+	"github.com/hydra13142/encoding/AMF"
 	"io"
+)
+
+var (
+	uncomplete = errors.New("Uncomplete File")
+	wrongcodec = errors.New("Wrong Codec")
+	findnometa = errors.New("No Media Information")
+	nokeyframe = errors.New("No Keyframe")
+	unsuitcode = errors.New("Different Codec")
 )
 
 type FLV struct {
 	Head []byte
+	Meta MetaData
 	Tags []Tag
 }
 
 func New() *FLV {
-	return &FLV{[]byte{}, []Tag{}}
+	return &FLV{[]byte{}, MetaData{}, []Tag{}}
 }
 
 func (this *FLV) Audio() bool {
@@ -22,100 +33,90 @@ func (this *FLV) Video() bool {
 	return len(this.Head) >= 9 && this.Head[4]&1 != 0
 }
 
-func (this *FLV) readHead(r io.Reader) error {
-	data := make([]byte, 9)
-	i, err := r.Read(data)
-	if i != 9 || err != nil {
-		return fmt.Errorf("FLV Header uncomplete")
+func (this *FLV) readHead(r io.Reader) (err error) {
+	var (
+		meta [9]byte
+		data []byte
+	)
+	if _, err = r.Read(meta[:]); err != nil {
+		return uncomplete
 	}
-	if data[0] != 'F' || data[1] != 'L' || data[2] != 'V' || data[3] != 1 {
-		return fmt.Errorf("Not a FLV Header")
+	if string(meta[:4]) != "FLV\x01" {
+		return wrongcodec
 	}
-	l := bytes_int32(data[5:]) - 5
-	rest := make([]byte, l)
-	i, err = r.Read(rest)
-	if i != int(l) {
-		return fmt.Errorf("FLV Header uncomplete")
+	l := bytes_int32(meta[5:])
+	data = make([]byte, l+4)
+	if _, err = r.Read(data[9:]); err != nil {
+		return err
 	}
-	if err != nil {
-		return fmt.Errorf("Without FLV Tags")
-	}
-	this.Head = make([]byte, 5+l)
-	copy(this.Head, data)
-	copy(this.Head[9:], rest[:l-4])
+	copy(data, meta[:])
+	this.Head = data[:l]
 	return nil
 }
 
-func (this *FLV) readTag(r io.Reader) error {
-	data := make([]byte, 11)
-	i, err := r.Read(data)
-	if err != nil {
+func (this *FLV) readTag(r io.Reader) (err error) {
+	var (
+		meta []byte
+		data []byte
+	)
+	meta = make([]byte, 11)
+	if _, err = r.Read(meta); err != nil {
 		return err
 	}
-	if i != 11 {
-		return fmt.Errorf("FLV Tag Header uncomplete")
-	}
-	l := bytes_int24(data[1:])
-	body := make([]byte, l+4)
-	i, err = r.Read(body)
-	if i != int(l+4) {
-		return fmt.Errorf("FLV Tag Body uncomplete")
-	}
-	switch data[0] & 31 {
+	switch meta[0] & 31 {
 	case 8, 9, 18:
-		this.Tags = append(this.Tags, Tag{data, body[:l]})
+		l := bytes_int24(meta[1:])
+		data = make([]byte, l+4)
+		if i, _ := r.Read(data); i != int(l+4) {
+			return uncomplete
+		}
+		this.Tags = append(this.Tags, Tag{meta, data[:l]})
 	default:
-		return fmt.Errorf("Unrecognised Tag type")
+		return wrongcodec
 	}
-	return err
+	return nil
 }
 
 func (this *FLV) ReadFrom(r io.Reader) (err error) {
-	err = this.readHead(r)
-	if err != nil {
+	if err = this.readHead(r); err != nil {
 		return err
 	}
-	err = this.readTag(r)
-	if err != nil {
+	if err = this.readTag(r); err != nil {
 		return err
 	}
 	if string(this.Tags[0].Data[3:13]) != "onMetaData" {
-		return fmt.Errorf("without media information")
+		return findnometa
 	}
-	for err != io.EOF {
-		err = this.readTag(r)
-		if err != nil && err != io.EOF {
-			return err
-		}
+	d := AMF.NewDecoder(bytes.NewReader(this.Tags[0].Data))
+	if err = d.Decode(nil); err != nil {
+		return err
 	}
-	defer func() {
-		if pnc := recover(); pnc != nil {
-			err = fmt.Errorf("%v", pnc)
-		}
-	}()
+	if err = d.Decode(&this.Meta); err != nil {
+		return err
+	}
+	for ; err == nil; err = this.readTag(r) {
+	}
+	if err != io.EOF {
+		return err
+	}
 	return nil
 }
 
 func (this *FLV) WriteTo(w io.Writer) (err error) {
-	_, err = w.Write(this.Head)
-	if err != nil {
+	if _, err = w.Write(this.Head); err != nil {
 		return err
 	}
-	_, err = w.Write([]byte{0, 0, 0, 0})
-	if err != nil {
+	if _, err = w.Write([]byte{0, 0, 0, 0}); err != nil {
 		return err
 	}
 	for _, tag := range this.Tags {
-		_, err = w.Write(tag.Head)
-		if err != nil {
+		if _, err = w.Write(tag.Head); err != nil {
 			return err
 		}
-		_, err = w.Write(tag.Data)
-		if err != nil {
+		if _, err = w.Write(tag.Data); err != nil {
 			return err
 		}
-		_, err = w.Write(int32_bytes(int(tag.Size() + 11)))
-		if err != nil {
+		if _, err = w.Write(int32_bytes(int(tag.Size() + 11))); err != nil {
 			return err
 		}
 	}

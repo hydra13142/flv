@@ -37,3 +37,41 @@ type Frames struct {
 	Times         []float64 `amf:"times"`
 	FilePositions []float64 `amf:"filepositions"`
 }
+
+func SameCodec(a, b *MetaData) bool {
+	if a.HasAudio != b.HasAudio {
+		return false
+	}
+	if a.HasAudio {
+		if a.AudioCodecID != b.AudioCodecID {
+			return false
+		}
+		if a.AudioDataRate != b.AudioDataRate {
+			return false
+		}
+		if a.AudioSampleSize != b.AudioSampleSize {
+			return false
+		}
+		if a.AudioSampleRate != b.AudioSampleRate {
+			return false
+		}
+	}
+	if a.HasVideo != b.HasVideo {
+		return false
+	}
+	if a.HasVideo {
+		if a.VideoCodecID != b.VideoCodecID {
+			return false
+		}
+		if a.VideoDataRate != b.VideoDataRate {
+			return false
+		}
+		if a.FrameRate != b.FrameRate {
+			return false
+		}
+		if a.Width != b.Width || a.Height != b.Height {
+			return false
+		}
+	}
+	return true
+}
